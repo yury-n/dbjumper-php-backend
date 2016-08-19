@@ -13,8 +13,8 @@ if (!in_array($requested_table, $existing_tables)) {
     die('Invalid table name');
 }
 
-$sth = $dbh->query('SELECT * FROM ' . $requested_table . ' LIMIT 20');
-$rows = $sth->fetchAll();
+$sth = $dbh->query('SELECT * FROM ' . $requested_table . ' LIMIT 10');
+$rows = $sth->fetchAll(PDO::FETCH_ASSOC);
 
 echo json_encode($rows);
 

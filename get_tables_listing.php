@@ -5,7 +5,7 @@ require('./allow_cross_origin.php');
 
 $dbh = get_pdo_connection();
 $sth = $dbh->query('SELECT TABLE_NAME, COLUMN_NAME, COLUMN_KEY FROM INFORMATION_SCHEMA.COLUMNS WHERE table_schema = "'.DB_DATABASE.'"');
-$rows = $sth->fetchAll();
+$rows = $sth->fetchAll(PDO::FETCH_ASSOC);
 
 $results = [];
 foreach ($rows as $row) {

@@ -3,6 +3,10 @@
 require('./util_funcs.php');
 require('./allow_cross_origin.php');
 
+/*
+ * GENERATE $query_schema FROM $_GET['query']
+ */
+
 $query = $_GET['query'];
 
 $tables_and_related_parts = explode('+', $query);
@@ -34,6 +38,11 @@ foreach ($tables_and_related_parts as $table_and_related_parts) {
         $join_by = null;
         $filters = isset($parts[1]) ? _parse_filter_part_into_assoc_array($parts[1]) : [];
     }
+    if (!empty($join_by) && count($join_by) == 1) {
+        // if only one columnname specified in join part
+        // it means it is the same columnname in the both tables we join
+        $join_by[1] = $join_by[0];
+    }
 
     $query_schema[] = [
         'table' => $table,
@@ -41,7 +50,6 @@ foreach ($tables_and_related_parts as $table_and_related_parts) {
         'filters' => $filters
     ];
 }
-
 /*
  * e.g. converts
  * "productname=bottle;status=3"
@@ -60,16 +68,47 @@ function _parse_filter_part_into_assoc_array($filter_part) {
     return $filters_assoc;
 }
 
+/*
+ * ASSIGN SHORT ALIASES TO JOINED TABLES, IF ALLOWABLE
+ */
+$short_aliases = array_map(function($table_schema) {
+    return substr($table_schema['table'], 0, 1);
+}, $query_schema);
+
+$aliases_have_dupes = (count($short_aliases) != count(array_unique($short_aliases)));
+
+$can_use_short_aliases = !$aliases_have_dupes;
+
+if ($can_use_short_aliases) {
+    foreach ($query_schema as $index => $table_schema) {
+        $query_schema[$index]['table_alias'] = $short_aliases[$index];
+    }
+}
+// first table shouldn't have an alias
+unset($query_schema[0]['table_alias']);
+
+
+/*
+ * INTRODUCE FIRST TABLE/JOINED TABLES VARS FOR CONVENIENCE
+ */
+$first_table_schema = $query_schema[0];
+$joined_tables_schemas = array_slice($query_schema, 1);
+
+
+/*
+ * REQUESTED TABLES VALIDATION
+ */
 $requested_tables = array_column($query_schema, 'table');
-
 $existing_tables = get_existing_tables();
-
 foreach ($requested_tables as $table) {
     if (!in_array($table, $existing_tables)) {
         die("Nonexistent table '$table'.");
     }
 }
 
+/*
+ * FETCH ALL EXISTING COLUMNS FOR THE REQUESTED TABLES
+ */
 $existing_columns = get_existing_table_columns(false, $requested_tables);
 $existing_columns_by_tables = [];
 foreach ($existing_columns as $row) {
@@ -78,9 +117,12 @@ foreach ($existing_columns as $row) {
     $existing_columns_by_tables[$table][] = $column;
 }
 
-foreach ($query_schema as $item) {
-    $table = $item['table'];
-    $filters = $item['filters'];
+/*
+ * VALIDATE COLUMNS USED IN FILTERS
+ */
+foreach ($query_schema as $table_schema) {
+    $table = $table_schema['table'];
+    $filters = $table_schema['filters'];
     foreach ($filters as $key => $value) {
         if ($value === null) {
             die("Missing filter value for key '$key'.");
@@ -91,67 +133,111 @@ foreach ($query_schema as $item) {
     }
 }
 
-$first_table = array_shift($query_schema);
-$joins = $query_schema;
+/*
+ * VALIDATE COLUMNS USED IN JOINS
+ */
+$first_table = $first_table_schema['table'];
 
-foreach ($joins as $schema_item) {
-    if ($schema_item['join_by'] !== null) {
-        
+foreach ($joined_tables_schemas as $table_schema) {
+
+    $joined_table = $table_schema['table'];
+    $join_by = $table_schema['join_by'];
+
+    if (empty($join_by)) {
+
+        die("Joined tables should define keys to join by.");
+
+    } else {
+
+        $first_table_key = $join_by[0];
+        $joined_table_key = $join_by[1];
+
+        if (!in_array($first_table_key, $existing_columns_by_tables[$first_table])) {
+            die("Nonexistent column '$first_table_key' used in join statement.");
+        }
+
+        if (!in_array($joined_table_key, $existing_columns_by_tables[$joined_table])) {
+            die("Nonexistent column '$joined_table_key' used in join statement.");
+        }
     }
 }
 
-//var_dump($query_schema);
-var_dump($requested_tables);
+/*
+ * ATTACH COLUMNS TO FETCH TO THE $schema
+ * IF COLUMN IS USED IN JOIN PLACE IT FIRST
+ */
+$first_table = $first_table_schema['table'];
+$first_table_schema['columns'] = $existing_columns_by_tables[$first_table];
 
-die();
-
-if (!in_array($requested_table, $existing_tables)) {
-    die('Invalid table name.');
+foreach ($joined_tables_schemas as $index => $table_schema) {
+    $joined_table = $table_schema['table'];
+    $join_by = $table_schema['join_by'];
+    $joined_table_key = $join_by[1];
+    $joined_tables_schemas[$index]['columns'] = $existing_columns_by_tables[$joined_table];
+    usort($joined_tables_schemas[$index]['columns'], function($a, $b) use ($joined_table_key) {
+        if ($a == $joined_table_key) {
+            return -1;
+        } else if ($b == $joined_table_key) {
+            return 1;
+        } else {
+            return 0;
+        }
+    });
 }
 
-$pdo_query = 'SELECT * FROM ' . $requested_table;
-if (!isset($exploded_query[1])) {
-    $sth = $dbh->query($pdo_query . ' LIMIT 10');
-} else {
-    $pdo_query .= ' WHERE 1=1 ';
-    $filtering = $exploded_query[1];
+/*
+ * BUILD SQL QUERY
+ */
 
-    $sth = $dbh->query('
-        SELECT 
-            COLUMN_NAME
-        FROM 
-            INFORMATION_SCHEMA.COLUMNS 
-        WHERE
-            TABLE_NAME = "'. $requested_table . '"
-            AND TABLE_SCHEMA = "' . DB_DATABASE . '"'
-    );
-    $existing_columns = array_column($sth->fetchAll(), 0);
-
-    $filtering_pairs = explode(';', $filtering);
-    $pdo_args = [];
-    foreach ($filtering_pairs as $filtering_pair) {
-        list($key, $value) = explode('=', $filtering_pair);
-        if (!in_array($key, $existing_columns)) {
-            die('Invalid column name.');
-        }
-        if (!isset($value)) {
-            die('Invalid query. Missing filter value.');
-        }
+$pdo_args = [];
+$pdo_query = "SELECT \n";
+$first_table = $first_table_schema['table'];
+foreach ($first_table_schema['columns'] as $index => $column) {
+    $is_last_column = ($index == count($first_table_schema['columns']) - 1);
+    $pdo_query .= "$first_table.$column as $column" . (!$is_last_column ? ', ' : "\n");
+}
+foreach ($joined_tables_schemas as $table_schema) {
+    $joined_table = $table_schema['table'];
+    $alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $joined_table;
+    $columns = array_map(function($column) use ($alias) {
+        return ($alias ? $alias . '.' : '') . $column;
+    }, $table_schema['columns']);
+    $pdo_query .= ', ' . implode(', ', $columns) . "\n";
+}
+$pdo_query .= "FROM $first_table \n";
+foreach ($joined_tables_schemas as $table_schema) {
+    $joined_table = $table_schema['table'];
+    $joined_table_alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $joined_table;
+    $join_by = $table_schema['join_by'];
+    $first_table_key = $join_by[0];
+    $joined_table_key = $join_by[1];
+    $pdo_query .= "LEFT JOIN $joined_table as $joined_table_alias " .
+                  "ON $first_table.$first_table_key = $joined_table_alias.$joined_table_key \n";
+}
+$pdo_query .= ' WHERE 1=1 ';
+foreach ($query_schema as $table_schema) {
+    $table = $table_schema['table'];
+    $alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $table;
+    foreach ($table_schema['filters'] as $key => $value) {
         if (strpos($value, ',') === false) {
-            $pdo_query .= "AND $key = ? ";
+            $pdo_query .= "AND $alias.$key = ? ";
             $pdo_args[] = $value;
         } else {
             $values = explode(',', $value);
             $qMarks = str_repeat('?,', count($values) - 1) . '?';
-            $pdo_query .= "AND $key IN ($qMarks) ";
+            $pdo_query .= "AND $alias.$key IN ($qMarks) ";
             $pdo_args = array_merge($pdo_args, $values);
         }
     }
-    $sth = $dbh->prepare($pdo_query);
-    $sth->execute($pdo_args);
 }
+$pdo_query .= "\n LIMIT 20";
+
+$sth = get_pdo_connection()->prepare($pdo_query);
+$sth->execute($pdo_args);
 
 $rows = $sth->fetchAll(PDO::FETCH_ASSOC);
+
+//echo $pdo_query; die();
 
 echo json_encode($rows);
 

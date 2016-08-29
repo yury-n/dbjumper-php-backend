@@ -69,26 +69,6 @@ function _parse_filter_part_into_assoc_array($filter_part) {
 }
 
 /*
- * ASSIGN SHORT ALIASES TO JOINED TABLES, IF ALLOWABLE
- */
-$short_aliases = array_map(function($table_schema) {
-    return substr($table_schema['table'], 0, 1);
-}, $query_schema);
-
-$aliases_have_dupes = (count($short_aliases) != count(array_unique($short_aliases)));
-
-$can_use_short_aliases = !$aliases_have_dupes;
-
-if ($can_use_short_aliases) {
-    foreach ($query_schema as $index => $table_schema) {
-        $query_schema[$index]['table_alias'] = $short_aliases[$index];
-    }
-}
-// first table shouldn't have an alias
-unset($query_schema[0]['table_alias']);
-
-
-/*
  * INTRODUCE FIRST TABLE/JOINED TABLES VARS FOR CONVENIENCE
  */
 $first_table_schema = $query_schema[0];
@@ -190,42 +170,41 @@ foreach ($joined_tables_schemas as $index => $table_schema) {
  */
 
 $pdo_args = [];
+
 $pdo_query = "SELECT \n";
+
 $first_table = $first_table_schema['table'];
-foreach ($first_table_schema['columns'] as $index => $column) {
-    $is_last_column = ($index == count($first_table_schema['columns']) - 1);
-    $pdo_query .= "$first_table.$column as $column" . (!$is_last_column ? ', ' : "\n");
-}
+$first_table_columns = array_map(function($column) use ($first_table) {
+    return "$first_table.$column";
+}, $first_table_schema['columns']);
+$pdo_query .= implode(', ', $first_table_columns) . "\n";
+
 foreach ($joined_tables_schemas as $table_schema) {
     $joined_table = $table_schema['table'];
-    $alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $joined_table;
-    $columns = array_map(function($column) use ($alias) {
-        return ($alias ? $alias . '.' : '') . $column;
+    $columns = array_map(function($column) use ($joined_table) {
+        return "$joined_table.$column as '$joined_table.$column'";
     }, $table_schema['columns']);
     $pdo_query .= ', ' . implode(', ', $columns) . "\n";
 }
 $pdo_query .= "FROM $first_table \n";
 foreach ($joined_tables_schemas as $table_schema) {
     $joined_table = $table_schema['table'];
-    $joined_table_alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $joined_table;
     $join_by = $table_schema['join_by'];
     $first_table_key = $join_by[0];
     $joined_table_key = $join_by[1];
-    $pdo_query .= "LEFT JOIN $joined_table as $joined_table_alias " .
-                  "ON $first_table.$first_table_key = $joined_table_alias.$joined_table_key \n";
+    $pdo_query .= "LEFT JOIN $joined_table ON $first_table.$first_table_key = $joined_table.$joined_table_key \n";
 }
 $pdo_query .= ' WHERE 1=1 ';
 foreach ($query_schema as $table_schema) {
     $table = $table_schema['table'];
-    $alias = !empty($table_schema['table_alias']) ? $table_schema['table_alias'] : $table;
     foreach ($table_schema['filters'] as $key => $value) {
         if (strpos($value, ',') === false) {
-            $pdo_query .= "AND $alias.$key = ? ";
+            $pdo_query .= "AND $table.$key = ? ";
             $pdo_args[] = $value;
         } else {
             $values = explode(',', $value);
             $qMarks = str_repeat('?,', count($values) - 1) . '?';
-            $pdo_query .= "AND $alias.$key IN ($qMarks) ";
+            $pdo_query .= "AND $table.$key IN ($qMarks) ";
             $pdo_args = array_merge($pdo_args, $values);
         }
     }

@@ -3,10 +3,10 @@
 require('./util_funcs.php');
 require('./allow_cross_origin.php');
 
+
 /*
  * GENERATE $query_schema FROM $_GET['query']
  */
-
 $query = $_GET['query'];
 
 $tables_and_related_parts = explode('+', $query);
@@ -20,9 +20,8 @@ $tables_and_related_parts = explode('+', $query);
 $query_schema = [];
 foreach ($tables_and_related_parts as $table_and_related_parts) {
 
-    if (strpos($table_and_related_parts, '(') !== false) { // from syntax "+users(userid=id)"
+    if (strpos($table_and_related_parts, '(') !== false) { // from syntax "+users(userid=id)..."
         // joined table
-        $table = explode('(', $table_and_related_parts)[0];
         preg_match('/^([^(]+)\(([^)]+)\)\.?(.+)?/', $table_and_related_parts, $matches);
         // e.g. products(id=userid).productname=bottle;status=3
         // $matches[1] = 'products';
@@ -123,22 +122,14 @@ foreach ($joined_tables_schemas as $table_schema) {
     $joined_table = $table_schema['table'];
     $join_by = $table_schema['join_by'];
 
-    if (empty($join_by)) {
+    list($first_table_key, $joined_table_key) = $join_by;
 
-        die("Joined tables should define keys to join by.");
+    if (!in_array($first_table_key, $existing_columns_by_tables[$first_table])) {
+        die("Nonexistent column '$first_table_key' used in join statement.");
+    }
 
-    } else {
-
-        $first_table_key = $join_by[0];
-        $joined_table_key = $join_by[1];
-
-        if (!in_array($first_table_key, $existing_columns_by_tables[$first_table])) {
-            die("Nonexistent column '$first_table_key' used in join statement.");
-        }
-
-        if (!in_array($joined_table_key, $existing_columns_by_tables[$joined_table])) {
-            die("Nonexistent column '$joined_table_key' used in join statement.");
-        }
+    if (!in_array($joined_table_key, $existing_columns_by_tables[$joined_table])) {
+        die("Nonexistent column '$joined_table_key' used in join statement.");
     }
 }
 
@@ -168,9 +159,7 @@ foreach ($joined_tables_schemas as $index => $table_schema) {
 /*
  * BUILD SQL QUERY
  */
-
 $pdo_args = [];
-
 $pdo_query = "SELECT \n";
 
 $first_table = $first_table_schema['table'];
@@ -211,6 +200,9 @@ foreach ($query_schema as $table_schema) {
 }
 $pdo_query .= "\n LIMIT 20";
 
+/*
+ * EXECUTE THE QUERY
+ */
 $sth = get_pdo_connection()->prepare($pdo_query);
 $sth->execute($pdo_args);
 

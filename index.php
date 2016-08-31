@@ -1,5 +1,7 @@
 <?php
 
+require('./allow_cross_origin.php');
+
 if (!isset($_GET['action'])) {
     die('Specify action.');
 }

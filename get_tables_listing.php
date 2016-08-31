@@ -1,7 +1,6 @@
 <?php
 
 require('./util_funcs.php');
-require('./allow_cross_origin.php');
 
 $rows = get_existing_table_columns(true);
 

@@ -1,8 +1,6 @@
 <?php
 
 require('./util_funcs.php');
-require('./allow_cross_origin.php');
-
 
 /*
  * GENERATE $query_schema FROM $_GET['query']
